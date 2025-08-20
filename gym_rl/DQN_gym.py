@@ -202,8 +202,7 @@ if __name__ == "__main__":
     set_seeds(config['seed'])
     replay_buffer = ReplayBuffer(config['buffer_size'])
 
-    # 【关键修改 1】: 移除了 render_mode='rgb_array'，让代码在服务器上更稳定
-    env = gym.make(config['env_name'])
+    env = gym.make(config['env_name'], render_mode='rgb_array', max_episode_steps=200)
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.n
 
@@ -214,5 +213,7 @@ if __name__ == "__main__":
 
     train_DQN(agent, env, config, replay_buffer)
     
-    # 【关键修改 2】: 确保在程序退出前，所有数据都已同步
     swanlab.finish()
+
+
+yrdy
