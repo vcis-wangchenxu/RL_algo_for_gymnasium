@@ -1,0 +1,30 @@
+general_config:
+  algo_name: "ActorCritic"
+  env_name: "MiniGrid-Empty-5x5-v0"
+  env_render: "rgb_array"
+  project_name: "MiniGrid-Empty-5x5-AC"
+  device: cuda:1
+  mode: train
+  seed: 42
+  train_steps: !!float 5e4
+  eval_eps: 5
+  eval_freq: 1000
+  update_steps: 256
+  actor_loss_coef: 1.0
+  critic_loss_coef: 0.5
+  entropy_coef: 0.01
+
+sweep_config:
+  method: bayes
+  metric:
+    goal: maximize
+    name: val/reward
+  parameters:
+    lr: 
+      distribution: uniform
+      max: 0.001
+      min: 0.0001
+    gamma:
+      max: 0.99
+      min: 0.9
+

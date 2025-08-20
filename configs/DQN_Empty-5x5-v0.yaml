@@ -1,0 +1,40 @@
+general_config:
+  algo_name: "DQN"
+  env_name: "MiniGrid-Empty-5x5-v0"
+  env_render: "rgb_array"
+  project_name: "MiniGrid-Empty-5x5-DQN"
+  device: cuda
+  mode: train
+  seed: 42
+  buffer_size: 10000
+  train_steps: !!float 5e4
+  eval_eps: 10
+  eval_freq: 1000
+
+sweep_config:
+  method: bayes
+  metric:
+    goal: maximize
+    name: val/reward
+  parameters:
+    lr: 
+      distribution: uniform
+      max: 0.0005
+      min: 0.0001
+    batch_size:
+      distribution: q_log_uniform_values
+      max: 128
+      min: 32
+      q: 8
+    gamma:
+      max: 0.99
+      min: 0.95
+    epsilon_start: 
+      value: 1.0
+    epsilon_end: 
+      value: 0.05
+    epsilon_decay: 
+      values: [18000, 20000, 22000]
+    target_update_freq: 
+      values: [900, 1000, 1100]
+

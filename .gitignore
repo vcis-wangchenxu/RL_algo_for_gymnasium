@@ -1,0 +1,4 @@
+runs/
+swanlog/
+__pycache__/
+*.pyc
