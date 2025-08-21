@@ -8,7 +8,7 @@ import gymnasium as gym
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.tensorboard import SummaryWriter
+import swanlab
 
 def set_seeds(seed: int) -> None:
     """ 设置所有随机种子 """
@@ -114,10 +114,25 @@ def dis_to_con(discrete_action: int, env, action_dim: int) -> float:
     action_upbound = env.action_space.high[0] # 获取连续动作空间的上界
     return action_lowbound + (discrete_action / (action_dim - 1)) * (action_upbound - action_lowbound)
 
-def train_DQN(agent, env, total_timesteps: int, epsilon_start: float, epsilon_end: float, 
-              epsilon_decay_steps: int, buffer_size: int, minimal_size: int, batch_size: int, 
-              moving_avg_window: int, replaybuffer: ReplayBuffer) -> None:
-    """ 训练DQN智能体 """
+def evaluate(agent: DQN, env: gym.Env, n_episodes: int) -> float:
+    """ 评估智能体在环境中的表现 """
+    total_return = 0.0
+    for _ in range(n_episodes):
+        state, _ = env.reset()
+        done = False
+        episode_return = 0.0
+        while not done:
+            action = agent.take_action(state, epsilon=0.0)
+            action_continuous = dis_to_con(action, env, agent.action_dim)
+            next_state, reward, terminated, truncated, _ = env.step([action_continuous])
+            done = terminated or truncated
+            state = next_state
+            episode_return += reward
+        total_return += episode_return
+    return total_return / n_episodes
+
+def train_DQN(agent: DQN, env: gym.Env, config: dict, replaybuffer: ReplayBuffer) -> None:
+    print("--- 开始训练 ---")
     return_list: List[float] = []
     max_q_value_list: List[float] = []
     max_q_value = 0.0
@@ -125,7 +140,7 @@ def train_DQN(agent, env, total_timesteps: int, epsilon_start: float, epsilon_en
     i_episode = 0
 
     # 主循环基于总步数
-    while total_steps < total_timesteps:
+    while total_steps < config['total_timesteps']:
         episode_return = 0.0
         state, _ = env.reset()  # 重置环境
         done = False
@@ -133,13 +148,15 @@ def train_DQN(agent, env, total_timesteps: int, epsilon_start: float, epsilon_en
 
         while not done:
             # 计算当前步数对应的epsilon
-            epsilon = epsilon_end + (epsilon_start - epsilon_end) * \
-                math.exp(-1. * total_steps / epsilon_decay_steps)
+            epsilon = config['epsilon_end'] + (config['epsilon_start'] - config['epsilon_end']) * \
+                      math.exp(-1. * total_steps / config['epsilon_decay_steps'])
             
             action = agent.take_action(state, epsilon)
+            
             max_q_value = agent.max_q_value(state) * 0.005 + max_q_value * 0.995  # 获取最大Q值
             max_q_value_list.append(max_q_value)
             action_continuous = dis_to_con(action, env, agent.action_dim)  # 将离散动作转换为连续动作
+            
             next_state, reward, terminated, truncated, _ = env.step([action_continuous])
             done = terminated or truncated
 
@@ -148,72 +165,73 @@ def train_DQN(agent, env, total_timesteps: int, epsilon_start: float, epsilon_en
             episode_return += reward
             total_steps += 1
 
-            if replaybuffer.size() >= minimal_size:
-                b_s, b_a, b_r, b_ns, b_d = replay_buffer.sample(batch_size)  # 采样批次
+            if replaybuffer.size() >= config['learning_starts']:
+                b_s, b_a, b_r, b_ns, b_d = replay_buffer.sample(config['batch_size'])  # 采样批次
                 transition_dict = {
                     'states': b_s, 'actions': b_a,
                     'rewards': b_r, 'next_states': b_ns, 'dones': b_d
                 }
                 loss = agent.update(transition_dict)
-                writer.add_scalar('Train/Loss', loss, agent.learn_step_counter)
+                swanlab.log({"Train/Loss": loss}, step=agent.learn_step_counter)
 
         return_list.append(episode_return)
-        writer.add_scalar('Return/by_Episode', episode_return, i_episode)
-        writer.add_scalar('Return/by_Step', episode_return, total_steps)
-        writer.add_scalar('Train/Epsilon_by_Step', epsilon, total_steps)
-        writer.add_scalar('Train/Max_Q_Value', max_q_value, total_steps)
+        swanlab.log({"Return/by_Episode": episode_return}, step=i_episode)
+        swanlab.log({
+            "Return/by_Step": episode_return,
+            "Train/Epsilon_by_Step": epsilon,
+            "Train/Max_Q_Value": max_q_value,
+        }, step=total_steps)
 
-        # 计算并记录移动平均回报
-        if len(return_list) >= moving_avg_window:
-            # 为了让曲线更平滑，可以每隔一定回合数再记录一次均值
-            if i_episode % 10 == 0:
-                avg_return = np.mean(return_list[-moving_avg_window:])
-                writer.add_scalar('Train/Average_Return', avg_return, total_steps)
-                print(f"Episode: {i_episode}, Steps: {total_steps}/{total_timesteps}, "
-                      f"Avg Return: {avg_return:.2f}, Epsilon: {epsilon:.3f}, Max Q Value: {max_q_value:.2f}")
-    
+        if i_episode % config['eval_freq'] == 0:
+            eval_reward = evaluate(agent, env, n_episodes=5)
+            swanlab.log({"Eval/Average_Return": eval_reward}, step=total_steps)
+            print(f"Episode: {i_episode}, Steps: {total_steps}/{config['total_timesteps']}, "
+                  f"Eval Avg Return: {eval_reward:.2f}, Epsilon: {epsilon:.3f}")
+            
     env.close()
-    writer.close()
+    print("--- 训练结束 ---")
 
 if __name__ == "__main__":
     device_str = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device_str)
 
-    config = {
-        "lr": 1e-3,
-        "total_timesteps": 80000, # 使用总步数作为终止条件
-        "hidden_dim": 128,
-        "gamma": 0.98,
-        "epsilon_start": 0.9,
-        "epsilon_end": 0.01,
-        "epsilon_decay_steps": 10000, # 控制衰减速度的步数
-        "target_update": 100, # 目标网络更新频率可以适当增加
-        "buffer_size": 10000,
-        "minimal_size": 1000, # 初始收集更多经验再开始学习
-        "batch_size": 64,
-        "moving_avg_window": 20,
-        "env_name": 'Pendulum-v1',
-        "seed": 1,
-        "device": device_str
-    }
+    run = swanlab.init(
+        project="DuelingDQN_gym",
+        name=f"DuelingDQN_Pendulum-v1_seed1",
+        config = {
+            "lr": 1e-3,
+            "total_timesteps": 50000, # 使用总步数作为终止条件
+            "hidden_dim": 128,
+            "gamma": 0.98,
+            "epsilon_start": 0.9,
+            "epsilon_end": 0.01,
+            "epsilon_decay_steps": 10000, # 控制衰减速度的步数
+            "target_update": 100, # 目标网络更新频率可以适当增加
+            "buffer_size": 10000,
+            "learning_starts": 1000, # 学习开始前的步数
+            "eval_freq": 20,    # 每20个episode评估一次 
+            "batch_size": 64,
+            "env_name": 'Pendulum-v1',
+            "seed": 1,
+            "device": device_str,
+            "dqn_type": 'DoubleDQN'  # 使用DoubleDQN
+        }
+    )
+    
+    config = swanlab.config
 
     set_seeds(config['seed'])
+    replay_buffer = ReplayBuffer(config['buffer_size'])
 
     env = gym.make(config['env_name'], render_mode='rgb_array', max_episode_steps=200)
     state_dim = env.observation_space.shape[0]
     action_dim = 11 # 离散化动作空间为11个离散动作
 
     agent = DQN(state_dim, config['hidden_dim'], action_dim, config['lr'],
-                config['gamma'], config['target_update'], device, dqn_type='DuelingDQN')
-    replay_buffer = ReplayBuffer(config['buffer_size'])
-
-    log_path = f"runs/DuelingDQN_{config['env_name']}_seed{config['seed']}"
-    writer = SummaryWriter(log_path)
-    print(f"Log path: {log_path}")
+                config['gamma'], config['target_update'], device, dqn_type=config['dqn_type'])
+    
     print(f"Using device: {config['device']}")
-    writer.add_hparams(config, {"Train/Average_Return": 0})
+    train_DQN(agent, env, config, replay_buffer)
 
-    train_DQN(agent, env, config['total_timesteps'], config['epsilon_start'], config['epsilon_end'],
-              config['epsilon_decay_steps'], config['buffer_size'], config['minimal_size'], config['batch_size'],
-              config['moving_avg_window'], replay_buffer)
+    swanlab.finish()
     

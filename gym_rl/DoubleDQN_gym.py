@@ -209,7 +209,6 @@ if __name__ == "__main__":
             "batch_size": 64,
             "learning_starts": 1000, # 学习开始前的步数
             "eval_freq": 20,    # 每20个episode评估一次 
-            "moving_avg_window": 20,
             "env_name": 'Pendulum-v1',
             "seed": 1,
             "device": device_str,
